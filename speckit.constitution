@@ -1,0 +1,121 @@
+# Speckit Constitution
+
+Purpose
+-------
+This document captures the core engineering principles, testing standards, UX consistency rules, performance constraints, and governance required for all work in the Speckit repository. It is intended to guide engineers and automated agents (CI, bots, copilots) when making implementation choices and reviewing changes.
+
+Principles (high level)
+------------------------
+- Small, observable, and testable units: Prefer small modules and single-responsibility functions that are easy to unit-test and reason about.
+- Predictable APIs and backwards compatibility: Public functions, endpoints, and stored data formats should preserve backwards compatibility or be accompanied by a documented migration plan.
+- Minimal operational surface: Target serverless-first architectures and ephemeral compute so the project can run on the Azure free tier.
+- Fail-fast and explicit errors: Validate inputs early, return clear errors, and avoid silent failures.
+
+Code quality
+------------
+- Formatting & linting: Every pull request must pass formatting and linting. Use project-appropriate tools (e.g., Black + ruff for Python, Prettier + ESLint for TypeScript). If the repo has a `pyproject.toml` or `package.json`, prefer the tools configured there.
+- Types & contracts: Use static typing where available (TypeScript types or Python typing). Public interfaces should include docstrings and concise type annotations.
+- Small diffs: Prefer multiple small, focused PRs over huge, multi-concern changes. Each PR should implement a single, reviewable change.
+- Documentation: Public modules, exported functions, and command-line tools must include a short README or docstring with input/output contracts and examples.
+
+Testing standards
+-----------------
+- Test pyramid: Maintain a balanced test pyramid. Unit tests are primary. Integration tests validate interactions with external services. End-to-end tests are used sparingly.
+- Test locations and naming: Place unit tests under `tests/unit/` or `tests/` and integration tests under `tests/integration/`. Test files should mirror source module names (e.g., `src/foo.py` -> `tests/test_foo.py`).
+- Deterministic tests: Tests must be deterministic and fast. Use mocking/stubbing for external services in unit tests. Integration tests that hit cloud services must be isolated and guarded by an opt-in CI job or use service emulators.
+- CI gates: Every PR must pass: lint, type-check (if applicable), unit tests. Integration tests run on a per-need basis and must be documented in the PR.
+
+User experience consistency
+---------------------------
+- API surface: HTTP APIs should follow consistent RESTful patterns (resource-based URIs, use of HTTP verbs, JSON for payloads). Use consistent field names and error formats across endpoints.
+- CLI tools: If the project exposes a CLI, prefer a consistent flag style (`--long-flag`, `-s`) and provide `--help` output with examples.
+- UX docs: Include one short example per user-facing feature in `README.md` or the module README demonstrating the happy-path usage.
+
+Performance requirements
+------------------------
+These are pragmatic budgets to ensure the project is compatible with free-tier cloud deployments:
+- Latency: For HTTP endpoints that perform lightweight work, target p95 < 300ms. For heavier batch jobs, clearly document expected runtime and break work into smaller tasks if possible.
+- Memory: Serverless functions and containers should aim to run with < 256MB resident memory by default. If a feature requires more, document why and restrict usage.
+- Binary/package size: Keep deployable artifact sizes small. Favor dependency pruning and lazy imports. Prefer smaller, well-maintained libraries over large monolithic frameworks when possible.
+- Startup / cold-start: Architect for quick startup. Avoid heavy synchronous initialization during process start.
+
+Deployability on the Azure free tier
+-----------------------------------
+All code must be deployable using Azure free-tier options. Design constraints and recommended patterns for Azure-only deployability:
+- Serverless-first: Prefer Azure Functions, Azure Static Web Apps, or small containers in Azure App Service that fit within the free-tier quotas.
+- Stateless services: Treat functions and containers as ephemeral. Persist state only when necessary and design for Azure-managed primitives (see examples below).
+- Azure primitives and equivalents (recommendations):
+  - Object storage: Azure Blob Storage (use the `@azure/storage-blob` SDK). For local development use Azurite.
+  - Queues/pub-sub: Azure Storage Queues or Azure Service Bus (choose Storage Queues for the simplest free-tier mapping).
+  - Datastore: Prefer Cosmos DB (use its free tier or provisioned free grant) or a configurable local dev alternative (SQLite or an in-repo JSON-backed store) so the application can run locally without paid services.
+- Local development: Use Azurite for Blob/Queue emulation. Provide `config.example` showing how to point the app to local endpoints for emulators.
+- Avoid paid-only services: Do not require premium Azure services, clusters, or VMs to run the application in a free-tier deployment.
+
+Governance and decision rules
+-----------------------------
+- Pull request checklist (must be satisfied before merge):
+  - Code compiles/type-checks.
+  - Linting/formatting passes.
+  - Unit tests pass and coverage for new code is provided.
+  - Public API or UX changes documented in README or CHANGELOG.
+  - Deployment/config changes are accompanied by required environment variable documentation and a rollback plan.
+- Architectural decisions and ADRs: Use a lightweight ADR (architecture decision record) for choices that affect architecture, deployment, or operational cost. Store ADRs in `docs/adr/` with the format: title, status, context, decision, consequences.
+- Ownership and code review: Every change must be reviewed by at least one other maintainer. For high-impact changes (security, data migrations, infra), require two reviewers and an explicit rollout plan.
+- Backwards compatibility: Changes that break public APIs or data formats must include a migration strategy, compatibility layer, or a major-version bump with documented upgrade instructions.
+
+Implementation choices and examples (Node / TypeScript / React)
+------------------------------------------------------------
+- Node/TypeScript backend: Use `package.json` scripts and TypeScript compiler checks. Canonical scripts:
+  - `npm run lint` (ESLint + Prettier)
+  - `npm test` (Jest or Vitest)
+  - `npm run build` (tsc && bundler if used)
+  - `npm run dev` (ts-node-dev, vite-node, or nodemon + ts-node)
+  Prefer `tsc --noEmit` for type-checking during CI.
+- React frontend: Prefer Vite + React + TypeScript for minimal build size and easy Static Web App deployments. Typical scripts:
+  - `npm run dev` (vite)
+  - `npm run build` (vite build)
+  - `npm test` (Vitest or Jest + Testing Library)
+- Local emulators and tooling: Use Azurite for Blob/Queue emulation. For Functions, use the Azure Functions Core Tools for local runtime testing.
+- Environment configuration: Read runtime configuration from environment variables (`process.env`). Store defaults in `config.example` or `.env.example` and NEVER commit real credentials. CI should inject secrets using GitHub Actions secrets or Azure DevOps secure variables.
+
+Observability and debugging
+---------------------------
+- Structured logging: Emit structured JSON logs when possible; include request IDs and trace IDs for cross-service tracing.
+- Tracing and metrics: Expose lightweight metrics (latency, error rate, request count) and instrument the most critical endpoints. Use cloud provider monitoring when available.
+- Local debugging: Provide a `Makefile` or simple npm/python scripts to run the service locally with environment variables loaded from `.env.local`.
+
+Security & privacy
+------------------
+- Least privilege: Grant services the minimum permissions necessary. For local development, use mock credentials or minimal-privilege user accounts.
+- Secrets handling: Never commit secrets. Use environment variables and CI secret stores for credentials.
+- Data protection: For any user data, document retention policies and store sensitive data encrypted at rest when persisted.
+
+PR / Release workflow
+---------------------
+- Every PR targeted at `main` must pass CI and be reviewed. Merges should be fast-forward when possible and accompanied by a concise changelog entry.
+- Releases: Tag releases semantically. If automated releases are configured (GitHub Actions), ensure the release process uses only free-tier resources and does not rely on paid cloud services to complete.
+
+Non-goals
+---------
+- This document does not mandate specific language or framework choices. It documents minimum expectations and constraints so new work is predictable and deployable on free tiers.
+
+Enforcement & evolution
+-----------------------
+- This constitution is enforced by: CI checks (lint/test), PR template reviewers, and maintainers during code review.
+- Revisions: Changes to this file must be recorded via a small PR with at least one reviewer. Major changes (that relax constraints on free-tier deployability) must include an ADR explaining why.
+
+Acceptance criteria for changes
+--------------------------------
+- New features must include unit tests and a README example.
+- New infra/deploy code must include a short `how-to` that shows how to deploy on at least one free-tier provider (Azure/GCP/AWS) using only free-tier services.
+- Migration or compatibility-impacting changes must include a documented migration plan and a rollback strategy.
+
+Questions for maintainers
+-------------------------
+Please confirm:
+1. Preferred languages/frameworks (if any) so we can lock recommended toolchains.
+2. Any mandatory CI provider or code style preferences to codify in this file.
+
+---
+
+Document created by convention. Update as the project grows.
